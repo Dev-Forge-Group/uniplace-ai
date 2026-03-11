@@ -1,6 +1,6 @@
 """
 AI 라우터 — UNI PLACE FastAPI
-위치: AI/app/api/v1/routes_ai.py
+위치: AI/app/api/v1/routes_ai_rest.py
 """
 import logging
 from typing import Any, Dict, Optional
@@ -31,17 +31,12 @@ def get_voice_pipeline():
     return _voice_pipeline
 
 def _run(payload: Dict[str, Any]) -> AiResponse | JSONResponse:
-    """공통 실행 헬퍼"""
     parsed = parse_ai_request(payload)
     if isinstance(parsed, JSONResponse):
         return parsed
     return execute_ai_request(parsed)
 
 def _set_intent(payload: Dict[str, Any], default_intent: str) -> None:
-    """
-    Spring이 보낸 intent가 있으면 유지, 없으면 default 사용.
-    Spring은 AiGatewayRequest.intent (enum) → JSON 직렬화 시 문자열로 전송.
-    """
     if not payload.get("intent"):
         payload["intent"] = default_intent
 
@@ -60,10 +55,6 @@ def general_qa(payload: Dict[str, Any] = Body(...)) -> AiResponse | JSONResponse
 # ── chat/agent-chatbot ────────────────────────────────────────────────────────
 @router.post("/chat/agent-chatbot", response_model=AiResponse, responses=ERROR_RESPONSES)
 def agent_chatbot(payload: Dict[str, Any] = Body(...)) -> AiResponse | JSONResponse:
-    """
-    Spring AiAgentChatbotUseCase → 여기로 옴.
-    Spring이 보낸 intent 그대로 사용 (AI_AGENT_CHATBOT / GENERAL_QA 등).
-    """
     _set_intent(payload, "AI_AGENT_CHATBOT")
     return _run(payload)
 
@@ -165,12 +156,60 @@ def roomservice_stock(payload: Dict[str, Any] = Body(...)) -> AiResponse | JSONR
     _set_intent(payload, "ROOMSERVICE_STOCK_MONITOR")
     return _run(payload)
 
-@router.post("/operations/complaint-priority-classification", response_model=AiResponse, responses=ERROR_RESPONSES)
-def complaint_priority(payload: Dict[str, Any] = Body(...)) -> AiResponse | JSONResponse:
-    _set_intent(payload, "COMPLAIN_PRIORITY_CLASSIFY")
-    return _run(payload)
 
-# ── voice STT/TTS (선택) ──────────────────────────────────────────────────────
+@router.post("/operations/complaint-priority-classification")
+def complaint_priority(payload: Dict[str, Any] = Body(...)):
+    """
+    Java ComplainAiClient 전용 엔드포인트.
+
+    Java 요청: {"comp_title": "...", "comp_ctnt": "..."}
+    Java 기대 응답: {"importance": "high|medium|low", "ai_reason": "한 문장 근거"}
+
+    intent_router(키워드 기반)를 거치지 않고
+    LLM 기반 classify_complain() 직접 호출.
+    """
+    try:
+        from app.services.anomaly.complain_priority_classify import classify_complain
+
+        slots   = payload.get("slots") or {}
+        title   = payload.get("comp_title") or slots.get("comp_title") or ""
+        content = payload.get("comp_ctnt")  or slots.get("comp_ctnt")  or ""
+
+        logger.info(f"[COMPLAIN_CLASSIFY] title={title[:30]!r}")
+
+        result = classify_complain(title, content)
+        return {
+            "importance": result.get("importance", "medium"),
+            "ai_reason":  result.get("ai_reason", ""),
+        }
+
+    except Exception as e:
+        logger.error(f"[COMPLAIN_CLASSIFY] 오류: {e}", exc_info=True)
+        return {"importance": "medium", "ai_reason": ""}
+
+
+@router.post("/operations/room-recommendation")
+def room_recommendation(payload: Dict[str, Any] = Body(...)):
+    try:
+        from app.ai.room_recommend import recommend_rooms
+        import asyncio
+
+        rooms = payload.get("rooms") or []
+        logger.info(f"[ROOM_RECOMMEND] 후보 방 수: {len(rooms)}")
+
+        if not rooms:
+            return []
+
+        result = asyncio.run(recommend_rooms(payload))
+        logger.info(f"[ROOM_RECOMMEND] Top3 결과: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"[ROOM_RECOMMEND] 오류: {e}", exc_info=True)
+        return []
+
+
+# ── voice STT/TTS ─────────────────────────────────────────────────────────────
 @router.post("/voice/stt")
 async def speech_to_text(
     file: UploadFile = File(...),
