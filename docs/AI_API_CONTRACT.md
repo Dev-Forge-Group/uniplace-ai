@@ -48,5 +48,11 @@ schemas are refused. `AiDataContractMySqlTest` applies the Flyway migrations to 
 the real schema, so a migration that drops a column the contract reads fails there. `app/services/tools/db_schema.py`
 only describes the schema to the LLM; it does not decide access.
 
-`app/repositories/board_repository.py` and `app/services/rag/retriever.py` still read MySQL directly with their own
-connection. Moving them behind Spring is the next step before the AI service is split into its own repository.
+The AI service has no database connection of its own. Its fixed reads go through Spring tools that take bound
+parameters and read through the same public view (`AiPublicReads`):
+
+| Tool | Args | Used by |
+|---|---|---|
+| `search_community_posts` | `keyword`, `limit` (≤ 10) | RAG community search; an empty keyword gives the newest posts |
+| `popular_community_posts` | `days` (≤ 90), `limit` (≤ 10) | RAG popular posts |
+| `list_rooms_for_embedding` | none | `python -m app.ai.room_embed` (needs `SPRING_BASE_URL` and `AI_INTERNAL_TOKEN`) |

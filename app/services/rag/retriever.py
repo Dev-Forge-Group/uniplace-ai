@@ -2,8 +2,7 @@ from app.integrations.milvus_client import search_vectors
 from app.schemas.ai_request import AiRequest
 from app.services.moderation.policy import detect_policy_matches, item_policy_text
 from app.services.rag.reranker import rerank
-import pymysql
-import os
+from app.services.tools.tool_executor import execute_tool
 import re
 
 FAQ_CONTEXT: dict[str, str] = {
@@ -141,98 +140,26 @@ def _extract_keyword(query: str) -> str:
 
 
 
+def _community_rows(tool: str, args: dict) -> list[dict]:
+    """Community posts from Spring's public reads (AiPublicReads); the AI does not open MySQL itself."""
+    result = execute_tool(tool, args)
+    if not result.get("success"):
+        print("community search error:", result.get("error"))
+        return []
+    return result.get("data") or []
+
+
 def _search_community_db(query: str) -> list[str]:
 
-    docs: list[str] = []
+    rows = _community_rows("search_community_posts", {"keyword": _extract_keyword(query), "limit": 5})
+    if not rows:
+        rows = _community_rows("search_community_posts", {"keyword": "", "limit": 3})
 
-    try:
-        conn = pymysql.connect(
-            host=os.getenv("DB_HOST"),
-            port=int(os.getenv("DB_PORT", 3306)),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD"),
-            db=os.getenv("DB_NAME"),
-            charset="utf8mb4",
-            cursorclass=pymysql.cursors.DictCursor
-        )
+    return [f"{r.get('board_title', '')}: {r.get('board_ctnt', '')}" for r in rows]
 
-        with conn.cursor() as cur:
-
-            sql = """
-            SELECT board_title, board_ctnt, created_at
-            FROM board
-            WHERE board_title LIKE %s
-               OR board_ctnt LIKE %s
-            ORDER BY created_at DESC
-            LIMIT 5
-            """
-            keyword = _extract_keyword(query)
-
-            cur.execute(
-                sql,
-                (f"%{keyword}%", f"%{keyword}%")
-            )
-            
-            rows = cur.fetchall()
-            
-            if not rows:
-
-                cur.execute("""
-                    SELECT board_title, board_ctnt
-                    FROM board
-                    ORDER BY created_at DESC
-                    LIMIT 3
-                """)
-
-                rows = cur.fetchall()
-
-            for r in rows:
-                title = r.get("board_title", "")
-                content = r.get("board_ctnt", "")
-                docs.append(f"{title}: {content}")
-
-    except Exception as e:
-        print("community search error:", e)
-
-    finally:
-        try:
-            conn.close()
-        except:
-            pass
-
-    return docs
 
 def _search_popular_posts():
 
-    docs = []
+    rows = _community_rows("popular_community_posts", {"days": 7, "limit": 3})
 
-    conn = pymysql.connect(
-        host=os.getenv("DB_HOST"),
-        port=int(os.getenv("DB_PORT")),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        db=os.getenv("DB_NAME"),
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor
-    )
-
-    with conn.cursor() as cur:
-
-        cur.execute("""
-        SELECT board_title, read_count
-        FROM board
-        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        ORDER BY read_count DESC
-        LIMIT 3
-        """)
-
-        rows = cur.fetchall()
-
-        for r in rows:
-            docs.append(
-                f"제목: {r['board_title']} (조회수 {r['read_count']})"
-            )
-
-    conn.close()
-
-    return docs
+    return [f"제목: {r['board_title']} (조회수 {r['read_count']})" for r in rows]

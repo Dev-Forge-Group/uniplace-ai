@@ -19,7 +19,6 @@ import argparse
 import asyncio
 import logging
 
-import aiomysql
 from pymilvus import (
     CollectionSchema,
     DataType,
@@ -29,6 +28,7 @@ from pymilvus import (
 
 from app.ai.room_recommend import _get_embedding
 from app.config.settings import settings
+from app.services.tools.tool_executor import execute_tool
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -76,32 +76,11 @@ def _room_to_text(row: dict) -> str:
 
 
 async def _fetch_rooms(incremental: bool = False) -> list[dict]:
-    """MySQL에서 방 목록 조회."""
-    conn = await aiomysql.connect(
-        host=settings.db_host,
-        port=int(settings.db_port),
-        db=settings.db_name,
-        user=settings.db_user,
-        password=settings.db_password,
-        charset="utf8mb4",
-    )
-    async with conn.cursor(aiomysql.DictCursor) as cur:
-        # 활성 방만 (delete_yn='N', 상태 available/contracted/reserved)
-        await cur.execute("""
-            SELECT
-                r.room_id, r.room_no, r.floor, r.room_size, r.room_type,
-                r.pet_allowed_yn, r.rent_price, r.manage_fee, r.deposit,
-                r.rent_min, r.sun_direction, r.room_options, r.room_desc,
-                r.room_st,
-                b.building_nm, b.building_addr
-            FROM rooms r
-            JOIN building b ON r.building_id = b.building_id
-            WHERE r.delete_yn = 'N'
-              AND b.delete_yn = 'N'
-        """)
-        rows = await cur.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    """방 목록 조회. Spring의 공개 조회(AiPublicReads)를 거치며, AI가 MySQL에 직접 연결하지 않는다."""
+    result = execute_tool("list_rooms_for_embedding", {})
+    if not result.get("success"):
+        raise RuntimeError(f"room list unavailable: {result.get('error')}")
+    return [dict(row) for row in result.get("data") or []]
 
 
 def _ensure_collection(client: MilvusClient) -> None:

@@ -45,7 +45,6 @@ duckduckgo-search>=6.0.0
  
 # 2. RAG - ChromaDB (Milvus 무료 대체)
 chromadb>=0.5.0
-pymysql==1.1.2
 soxr==1.0.0
  
 # 3. RAG - 한국어 임베딩 모델 (무료 로컬, 최초 실행 시 ~500MB 다운로드)
