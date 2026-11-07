@@ -31,3 +31,22 @@ This document is the single source of truth for intent-to-endpoint mapping.
 3. FastAPI normalizes slot names by snake_case/camelCase (`get_slot`).
 4. Spring sends `X-AI-Contract-Version` header for version tracking.
 5. FastAPI exposes `/api/v1/ai/contract` for contract introspection.
+
+## Data access for generated SQL (FastAPI -> Spring)
+
+The chatbot's text-to-SQL tools send SQL to Spring's `/v1/ai/tools/execute`, which runs it. What that SQL may read is
+decided in one place, `AiDataContract` in `uni-place-backend/.../domain/ai/application/tool/`:
+
+| Tool | Reads |
+|---|---|
+| `query_database` (signed out) | Open tables as stored; `building`, `room_reservation`, `space_reservations`, `board`, `reply`, the like tables and `orders` without personal columns. Personal tables (`users`, `contract`, `complain`, `payment`, `monthly_charge`, `qna`) answer `AUTH_REQUIRED`. |
+| `query_my_data` (signed in) | The same, plus the personal tables restricted to the signed-in user's rows. The restriction is applied to each table the SQL reads, so conditions in the SQL cannot widen it. |
+| `query_database_admin` (administrators) | Every table except credentials, biometrics and login tokens, without the password hash and resident registration numbers. |
+
+Before running a statement, Spring replaces every table it reads with what the contract allows. Comments and other
+schemas are refused. `AiDataContractMySqlTest` applies the Flyway migrations to MySQL and checks the contract against
+the real schema, so a migration that drops a column the contract reads fails there. `app/services/tools/db_schema.py`
+only describes the schema to the LLM; it does not decide access.
+
+`app/repositories/board_repository.py` and `app/services/rag/retriever.py` still read MySQL directly with their own
+connection. Moving them behind Spring is the next step before the AI service is split into its own repository.

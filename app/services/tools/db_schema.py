@@ -4,14 +4,18 @@ LLM에게 전달할 DB 스키마 정의.
 
 Text-to-SQL에서 LLM이 올바른 SQL을 생성하려면
 정확한 테이블명, 컬럼명, 관계, enum 값을 알아야 합니다.
+
+어떤 테이블의 어떤 행·컬럼을 실제로 읽을 수 있는지는 백엔드의 AiDataContract가 정한다
+(uni-place-backend .../domain/ai/application/tool/AiDataContract.java). 이 문서는 LLM 안내용이며,
+여기 없는 컬럼(비밀번호 해시, 주민등록번호, 예약자 이름·전화번호 등)은 백엔드가 쿼리에서 빼고 실행한다.
 """
 
 DB_SCHEMA = """
 [UNI PLACE DB 스키마]
 ⚠️ 테이블명 정확히 사용. building(단수)·rooms(복수) 혼용 주의.
 
-== 회원 테이블 ==
-▶ users: user_id(PK) user_nm user_email user_pwd user_birth user_tel user_nickname user_role(user/admin) last_login_at user_st delete_yn
+== 회원 테이블 (관리자 전체 조회, 로그인 사용자는 query_my_data로 본인 행만) ==
+▶ users: user_id(PK) user_nm user_email user_birth user_tel user_nickname user_role(user/admin) last_login_at user_st delete_yn
   (회원수 조회: SELECT COUNT(*) FROM users WHERE delete_yn='N'  /  역할별: GROUP BY user_role)
 
 == 시스템 관리 테이블 ==
@@ -28,9 +32,10 @@ DB_SCHEMA = """
   ⚠️ LIKE 검색: (r.room_options LIKE '%에어컨%' OR r.room_options LIKE '%aircon%') 형태
 ▶ reviews: review_id(PK) user_id room_id(FK) rating(1~5) review_title review_ctnt read_count like_count created_at
 ▶ common_space: space_id(PK) space_nm building_id(FK) space_capacity space_floor space_options space_desc
-▶ room_reservation: tour_id(PK) building_id(FK) room_id(FK) tour_start_at tour_end_at tour_nm tour_tel tour_st(pending/confirmed/cancelled/completed/ended/no_show) created_at
-  ⚠️ user_id 컬럼 없음 → query_my_data 사용 불가
+▶ room_reservation: tour_id(PK) building_id(FK) room_id(FK) tour_start_at tour_end_at tour_st(pending/confirmed/cancelled/completed/ended/no_show) created_at
+  ⚠️ user_id 컬럼 없음 → query_my_data 사용 불가. 예약자 이름·전화번호는 조회할 수 없음
 ▶ board: board_id(PK) board_title user_id board_ctnt read_count code created_at anonymity(Y/N)
+  (anonymity='Y' 글은 user_id가 NULL로 나온다)
 ▶ notice: notice_id(PK) notice_title notice_ctnt notice_st(active/inactive) read_count created_at
 ▶ faq: faq_id(PK) faq_title faq_ctnt is_active(1/0) created_at
 ▶ company_info: company_info_id(PK) company_nm company_ceo company_tel company_email company_addr
@@ -46,6 +51,9 @@ DB_SCHEMA = """
   ⚠️ created_at 컬럼 없음. 정렬은 paid_at 사용. query_my_data 필수.
   상품명 조회 시 JOIN service_goods sg ON p.service_goods_id=sg.service_goods_id
 ▶ service_goods: service_goods_id(PK) service_goods_cd service_goods_nm is_active display_order
+▶ qna: qna_id(PK) user_id qna_title qna_ctnt qna_st created_at (1:1 문의, 로그인 필요)
+▶ orders: order_id(PK) user_id order_st total_price order_created_at (로그인 없이 조회하면 order_id·order_st·order_created_at만 있음)
+▶ monthly_charge: charge_id(PK) contract_id(FK) charge_type billing_dt price charge_st (로그인 필요, 본인 계약분만)
 
 [빌딩명] 한글→영문 변환 필수 (DB는 영문 저장)
   유니플레이스/유니플A → Uniplace A | 유니플B → Uniplace B | 유니플C → Uniplace C
@@ -57,28 +65,3 @@ DB_SCHEMA = """
 - 로그인 테이블: WHERE user_id=\'{user_id}\' 필수
 - SELECT만 허용, LIMIT 50
 """
-
-# SQL 실행 허용 테이블 화이트리스트
-ALLOWED_TABLES = {
-    # 공개
-    "building", "rooms", "reviews", "common_space",
-    "room_reservation", "board", "notice", "faq", "company_info",
-    # 로그인 필요
-    "contract", "space_reservations", "complain", "payment", "qna", "monthly_charge",
-    "product_building_stock", "service_goods",
-    "orders", "order_items", "product",
-    "qna",
-    "monthly_charge",
-}
-
-# 로그인이 필요한 테이블 (user_id 강제 주입)
-AUTH_REQUIRED_TABLES = {
-    "contract", "space_reservations", "complain", "payment", "qna", "monthly_charge",
-}
-
-# 절대 허용 안 되는 SQL 키워드
-FORBIDDEN_SQL_KEYWORDS = {
-    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
-    "CREATE", "GRANT", "REVOKE", "EXEC", "EXECUTE", "CALL",
-    "INTO", "SET ", "MERGE",
-}
