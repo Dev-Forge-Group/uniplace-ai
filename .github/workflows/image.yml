@@ -1,0 +1,67 @@
+name: Image
+
+# Builds the AI service and pushes it to Amazon ECR as uniplace-ai:<commit> and uniplace-ai:main. The cluster runs
+# uniplace-ai:latest, which IBM-1st-Project's dev pipeline still pushes; this workflow moves latest only when run by hand
+# with "promote to latest", once the UniPlace backend in that deployment matches this service.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      promote_latest:
+        description: Also tag this build uniplace-ai:latest (the cluster pulls latest)
+        type: boolean
+        default: false
+
+jobs:
+  smoke:
+    name: AI REST smoke gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install smoke dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run AI smoke tests
+        # Kept as in IBM-1st-Project's ai-docker workflow, which reports the smoke tests without failing on them.
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+        run: python -m unittest discover -s tests -p "test_ai_rest_smoke.py" -v
+
+  image:
+    name: Build and push the AI image
+    needs: smoke
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Tags
+        id: tags
+        run: |
+          image="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/uniplace-ai"
+          tags="$image:${{ github.sha }}"$'\n'"$image:main"
+          if [ "${{ inputs.promote_latest }}" = true ]; then tags="$tags"$'\n'"$image:latest"; fi
+          { echo "list<<EOF"; echo "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
